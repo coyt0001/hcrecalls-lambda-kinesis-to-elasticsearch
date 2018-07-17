@@ -17,6 +17,14 @@ const
  * @prop {Object} endpoint AWS endpoint
  * @prop {String} index AWS index
  * @prop {String} doctype AWS index
+ * @prop {Object} credentials AWS credentials object
+ * @prop {Number} processed Number of successfully processed records
+ * @prop {Array} failed List of records that have failed to process
+ * @prop {Object} context Handler context reference
+ * @prop {Function} processedSuccessfully Incriments processed counter
+ * @prop {Function} processedUnsuccessfully Adds record to unprocessed list
+ * @prop {Function} handleRequest Async wrapper for AWS.NodeHttpClient.handleRequest
+ * @prop {Function} run Runs request manager, uploading records to AWS ES service
  */
 class RecordProcessor {
   constructor(records, config, context) {
@@ -44,82 +52,82 @@ class RecordProcessor {
   processedUnsuccessfully(doc) { this.failed.push(doc); }
 
   /**
-     * @method handleRequest
-     * @description Async wrapper for AWS.NodeHttpClient.handleRequest
-     * @param {Object} req AWS.HttpRequest to be processed
-     * @param {Object} opts AWS.NodeHttpClient.handleRequest options, defaults to null
-     * @returns {Promise} Response body or error
-     */
-    async handleRequest(req, opts = null) {
-      const sender = new AWS.NodeHttpClient();
+   * @method handleRequest
+   * @description Async wrapper for AWS.NodeHttpClient.handleRequest
+   * @param {Object} req AWS.HttpRequest to be processed
+   * @param {Object} opts AWS.NodeHttpClient.handleRequest options, defaults to null
+   * @returns {Promise} Response body or error
+   */
+  async handleRequest(req, opts = null) {
+    const sender = new AWS.NodeHttpClient();
 
-      return new Promise((resolve, reject) => {
-        sender.handleRequest(req, opts, httpResponse => {
-          let _respBody = '';
-          httpResponse.on('data', chunk => { _respBody += chunk; });
-          httpResponse.on('end', chunk => { resolve(_respBody); });
-        }, reject);
-      })
-    }
+    return new Promise((resolve, reject) => {
+      sender.handleRequest(req, opts, httpResponse => {
+        let _respBody = '';
+        httpResponse.on('data', chunk => { _respBody += chunk; });
+        httpResponse.on('end', chunk => { resolve(_respBody); });
+      }, reject);
+    })
+  }
 
-    /**
-     * @method run
-     * @description Runs request manager
-     * @returns 
-     */
-    async run() {
-      const { 
-        records,
+  /**
+   * @method run
+   * @description Runs request manager
+   * @returns 
+   */
+  async run() {
+    const { 
+      records,
+      region,
+      endpoint,
+      index,
+      doctype,
+      credentials,
+      handleRequest,
+      processedSuccessfully,
+      processedUnsuccessfully
+    } = this;
+
+    await Promise.all(R.map(async _record => {
+      // Create request
+      const body = (new Buffer(_record.kinesis.data, 'base64')).toString();
+      let _request = new AWS.HttpRequest(endpoint);
+      
+      _request = R.merge({
+        method: 'POST',
+        path: path.join('/', index, doctype),
         region,
-        endpoint,
-        index,
-        doctype,
-        credentials,
-        handleRequest,
-        processedSuccessfully,
-        processedUnsuccessfully
-      } = this;
+        headers: R.merge({
+          'presigned-expires': false,
+          Host: endpoint.host
+        }, _request.headers),
+        body
+      }, _request);
+      
+      // Sign request
+      const _signer = new AWS.Signers.v4(_request, "es");
+  
+      _signer.addAuthorization(credentials, new Date());
+  
+      // Make request
+      try {
+        const _result = await handleRequest(_request);
+        context.succeed(`Added document: '${body}'`);
+        processedSuccessfully();
+        return _result;
+      }
+      catch(err) {
+        context.fail(`Failed to add document: '${body}'`)
+        processedUnsuccessfully(body);
+        return err;
+      }
+    }, records));
 
-      await Promise.all(R.map(async _record => {
-        // Create request
-        const body = (new Buffer(_record.kinesis.data, 'base64')).toString();
-        let _request = new AWS.HttpRequest(endpoint);
-        
-        _request = R.merge({
-          method: 'POST',
-          path: path.join('/', index, doctype),
-          region,
-          headers: R.merge({
-            'presigned-expires': false,
-            Host: endpoint.host
-          }, _request.headers),
-          body
-        }, _request);
-        
-        // Sign request
-        const _signer = new AWS.Signers.v4(_request, "es");
-    
-        _signer.addAuthorization(credentials, new Date());
-    
-        // Make request
-        try {
-          const _result = await handleRequest(_request);
-          context.succeed(`Added document: '${body}'`);
-          processedSuccessfully();
-          return _result;
-        }
-        catch(err) {
-          context.fail(`Failed to add document: '${body}'`)
-          processedUnsuccessfully(body);
-          return err;
-        }
-      }, records));
-
-      return {
-        processed: this.processed,
-        failed: this.failed.length
-      };
-    }
+    return {
+      processed: this.processed,
+      failed: this.failed.length
+    };
+  }
 }
 
 /**
