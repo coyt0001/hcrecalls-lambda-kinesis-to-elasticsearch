@@ -1,0 +1,14 @@
+{
+  "name": "hcrecalls-lambda-kinesis-to-elasticsearch",
+  "version": "1.0.0",
+  "description": "Used to upload JSON pushed from Kinesis to Elasticsearch.",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coyt0001/hcrecalls-lambda-kinesis-to-elasticsearch.git"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.276.1",
+    "ramda": "^0.25.0"
+  }
+}
